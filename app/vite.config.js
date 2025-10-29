@@ -7,8 +7,7 @@ export default defineConfig({
   server: {
     host: true, // same as --host 0.0.0.0
     allowedHosts: [
-        '.ngrok-free.dev',
-        'decentradocs.loca.lt'
+        '.ngrok-free.dev'
     ],
   },
 })

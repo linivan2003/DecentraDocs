@@ -13,7 +13,7 @@ function App() {
     //Initialize YJS
     const doc = new Y.Doc(); // creates a shared document that handles sychronization between clients (this can contain multiple pieces of data)
     const type = doc.getText("monaco"); //get the shared text object from the Yjs document with the key "monaco"(only monaco text is shared) and represent it as type
-    const provider = new WebrtcProvider("test-room", doc, { signaling: ["ws://4.155.107.179:4444 "], debug: true});   // creates a webRTC provider that sends changes to other clients, define our Azure VM as our signalling server
+    const provider = new WebrtcProvider("test-room", doc, { signaling: ["ws://4.155.107.179:4444"]});   // creates a webRTC provider that sends changes to other clients, define our Azure VM as our signalling server
     //Bind YJS to Monaco
     //Binds the local editor to the shared text
     //what the parameters are: type -> shared yjs document text, editorRef.current.getModel() -> local Monaco Editor's Text model, new Set([editorRef.current]) -> A set containg the shared editor, provider.awareness -> track curosr positions and selections
