@@ -49,7 +49,8 @@ function App() {
       discoveryWS,
       peerOpts: {
        host: 'signal.thisone.work',
-       path: '/peerjs',
+       path: '/signal',
+       port: 443,
        secure: true,
         // TURN/STUN config:
         config: {
