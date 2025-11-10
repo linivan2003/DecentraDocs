@@ -12,12 +12,14 @@ A React application built with Vite featuring Monaco Editor.
 2. Navigate to the app directory: `cd app`
 3. Install dependencies: `npm install`
 4. Start the development server: `npm run dev`
-6. cd to opt/y-webrtc/ on Azure VM 
-7. start signalling Server with:
+5. start nginx(reverse proxy) with:
 ```
-PORT=4444 node ./bin/server.js
+sudo systemctl start nginx
 ```
-
+6. start signalling server at opt/peerjs-server
+```
+node server.js
+```
 
 ## Testing
 1. Test on 2 different browsers to see the updates
