@@ -12,11 +12,12 @@ A React application built with Vite featuring Monaco Editor.
 2. Navigate to the app directory: `cd app`
 3. Install dependencies: `npm install`
 4. Start the development server: `npm run dev`
-5. start nginx(reverse proxy) with:
+5. SSH to Azure VM
+6. start nginx(reverse proxy) with:
 ```
 sudo systemctl start nginx
 ```
-6. start signalling server at opt/peerjs-server
+7. start signalling server at opt/peerjs-server
 ```
 node server.js
 ```
