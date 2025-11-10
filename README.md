@@ -22,6 +22,10 @@ sudo systemctl start nginx
 node server.js
 ```
 
-## Testing
-1. Test on 2 different browsers to see the updates
 
+## Testing in Production
+1. 1st browser nagivagte to:
+https://decentradocs-delta.vercel.app/?room=my-room&id=user1-id
+
+2. 2nd browser navigate to:
+https://decentradocs-delta.vercel.app/?room=my-room&id=user2-id&peers=user1-id
