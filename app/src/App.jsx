@@ -14,7 +14,6 @@ function randomColor() {
 
 function App() {
   const roomId = useMemo(() => new URLSearchParams(window.location.search).get('room') || 'test-room', [])
-  const myId   = useMemo(() => new URLSearchParams(window.location.search).get('id')    || crypto.randomUUID(), [])
   const peers0 = useMemo(() => {
     const raw = new URLSearchParams(window.location.search).get('peers') || ''
     return raw.split(',').map(s => s.trim()).filter(Boolean)
@@ -26,6 +25,7 @@ function App() {
   const bindingRef = useRef()
 
   useEffect(() => {
+    const myId = new URLSearchParams(window.location.search).get('id') || crypto.randomUUID();
     const doc = new Y.Doc()
     ydocRef.current = doc
     new IndexeddbPersistence(`doc:${roomId}`, doc)
@@ -35,9 +35,10 @@ function App() {
     awareness.setLocalStateField('user', { name: `User-${Math.floor(Math.random()*1000)}`, color: randomColor() })
 
    // OIDC-gated discovery WS (make sure this endpoint exists)
-   // const token = 'ID_TOKEN'
+   const token = 'ID_TOKEN'
    // const discoveryWS = new WebSocket(`wss://signal.thisone.work/room/${roomId}?token=${token}`)
-   const discoveryWS = null // using URL ?peers=… for now
+   // const discoveryWS = null // using URL ?peers=… for now
+    const discoveryWS = new WebSocket(`ws://localhost:10000/room/${encodeURIComponent(roomId)}?userId=${encodeURIComponent(myId)}&token=${encodeURIComponent(token)}`);
 
     // Start PeerJS transport
     transportRef.current = new YPJProvider({
@@ -66,7 +67,7 @@ function App() {
       try { discoveryWS?.close() } catch {}
       doc.destroy()
     }
-  }, [roomId, myId, peers0])
+  }, [roomId, peers0])
 
   function handleEditorDidMount(editor) {
     const ytext = ydocRef.current.getText('monaco')
