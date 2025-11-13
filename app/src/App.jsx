@@ -38,7 +38,7 @@ function App() {
    const token = 'ID_TOKEN'
    // const discoveryWS = new WebSocket(`wss://signal.thisone.work/room/${roomId}?token=${token}`)
    // const discoveryWS = null // using URL ?peers=… for now
-    const discoveryWS = new WebSocket(`ws://localhost:10000/room/${encodeURIComponent(roomId)}?userId=${encodeURIComponent(myId)}&token=${encodeURIComponent(token)}`);
+    const discoveryWS = new WebSocket(`wss://signal.thisone.work/room/${encodeURIComponent(roomId)}?userId=${encodeURIComponent(myId)}&token=${encodeURIComponent(token)}`);
 
     // Start PeerJS transport
     transportRef.current = new YPJProvider({
