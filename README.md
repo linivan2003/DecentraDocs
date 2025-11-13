@@ -20,13 +20,13 @@ sudo systemctl start nginx
 ```
 restart signalling server at opt/peerjs-server
 ```
-node server.js
+pm2 restart server.js
 ```
 
 
 ## Testing in Production
 1. 1st browser nagivagte to:
-https://decentradocs-delta.vercel.app/?room=my-room&id=user1-id
+https://decentradocs-delta.vercel.app/?room=test-room
 
 2. 2nd browser navigate to:
-https://decentradocs-delta.vercel.app/?room=my-room&id=user2-id&peers=user1-id
+https://decentradocs-delta.vercel.app/?room=test-room

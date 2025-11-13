@@ -119,5 +119,4 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-console.log("PeerJS server running on port 9000, path:", "/signal");
 console.log("WebSocket discovery server running on port 10000");
