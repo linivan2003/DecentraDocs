@@ -16,7 +16,7 @@ All DNS is configured in Cloudflare (which only i can access, don't think cloudf
 
 | Service | Domain | Notes |
 |---------|--------|-------|
-| Frontend | app.emmettlsc.com | Proxied through Cloudflare |
+| Frontend | decentradocs.emmettlsc.com | Proxied through Cloudflare |
 | Signaling | signal.emmettlsc.com | Proxied through Cloudflare |
 | OIDC (Dex) | dex.emmettlsc.com | Proxied through Cloudflare |
 | TURN/STUN | turn.emmettlsc.com | Not proxied |
@@ -62,7 +62,7 @@ For the frontend:
 
 ```nginx
 server {
-    server_name app.emmettlsc.com;
+    server_name decentradocs.emmettlsc.com;
     root /srv/app/dist;
 }
 ```
@@ -188,4 +188,4 @@ Example:
 cp -r build/ /srv/app/dist
 ```
 
-nginx serves app.emmettlsc.com from /srv/app/dist
+nginx serves decentradocs.emmettlsc.com from /srv/app/dist
