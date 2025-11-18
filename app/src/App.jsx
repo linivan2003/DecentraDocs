@@ -5,7 +5,7 @@ import { MonacoBinding } from "y-monaco"   //imports MonacoBinding class that co
 import {IndexeddbPersistence} from "y-indexeddb" //imports IndexeddbPersistence class from y-indexeddb package
 import YPJProvider from './YPJProvider.jsx'
 import * as awarenessProtocol from 'y-protocols/awareness'
-import { useGoogleLogin } from '@react-oauth/google'
+import { login, getUser, getIdToken, getCanonicalUserId } from './auth'
 
 // Color for awareness
 function randomColor() {
@@ -14,7 +14,8 @@ function randomColor() {
 }
 
 function App() {
-  const [idToken, setIdToken] = useState(localStorage.getItem('id_token') || null)
+  const [user, setUser] = useState(null)
+  const [idToken, setIdToken] = useState(null)
 
   const roomId = useMemo(() => new URLSearchParams(window.location.search).get('room') || 'test-room', [])
   const peers0 = useMemo(() => {
@@ -28,33 +29,45 @@ function App() {
   const transportRef = useRef()
   const bindingRef = useRef()
 
-  const login = useGoogleLogin({
-    onSuccess: async (response) => {
-      const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { Authorization: `Bearer ${response.access_token}` }
-      })
-      const userInfo = await res.json()
+  // is user is already authenticated on mount?
+  useEffect(() => {
+    getUser().then(user => {
+      if (user) {
+        setUser(user)
+        setIdToken(user.id_token)
+      }
+    })
+  }, [])
 
-      localStorage.setItem('id_token', response.access_token)
-      setIdToken(response.access_token)
-    },
-  })
+  const handleLogin = async () => {
+    try {
+      await login()
+    } catch (error) {
+      console.error('Login failed:', error)
+    }
+  }
 
   useEffect(() => {
     // is user logged in? (need some more thorough checking here...)
-    if (!idToken) return
+    if (!idToken || !user) return
 
-    const myId = new URLSearchParams(window.location.search).get('id') || crypto.randomUUID();
+    // use the canonical user ID (iss#sub format as per the wip design doc... TODO do some review here)
+    const myId = getCanonicalUserId(user)
     const doc = new Y.Doc()
     ydocRef.current = doc
     new IndexeddbPersistence(`doc:${roomId}`, doc)
 
     const awareness = new awarenessProtocol.Awareness(doc)
     awarenessRef.current = awareness
-    awareness.setLocalStateField('user', { name: `User-${Math.floor(Math.random()*1000)}`, color: randomColor() })
+    const displayName = user.profile.name || user.profile.email || 'Anonymous'
+    awareness.setLocalStateField('user', { name: displayName, color: randomColor() })
 
-   // OIDC-gated discovery WS
-    const discoveryWS = new WebSocket(`ws://localhost:10000/room/${encodeURIComponent(roomId)}?userId=${encodeURIComponent(myId)}&token=${encodeURIComponent(idToken)}`);
+    // OIDC discovery WS 
+    const signalingUrl = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:10000'
+    const discoveryWS = new WebSocket(`${signalingUrl}/room/${encodeURIComponent(roomId)}?userId=${encodeURIComponent(myId)}&token=${encodeURIComponent(idToken)}`)
+
+    // TURN server config
+    const turnUrl = import.meta.env.VITE_TURN_URL || 'localhost'
 
     // Start PeerJS transport
     transportRef.current = new YPJProvider({
@@ -65,21 +78,23 @@ function App() {
       awareness,
       discoveryWS,
       peerOpts: {
-       // non local setup:
-       // host: 'signal.thisone.work',
-       // path: '/signal',
-       // port: 443,
-       // secure: true,
+        // Production setup:
+        host: 'signal.emmettlsc.com',
+        path: '/',
+        port: 443,
+        secure: true,
 
-       // local testing:
-       host: 'localhost',
-       path: '/',
-       port: 9000,
-       secure: false,
-        // TURN/STUN config:
+        // For local testing:
+        // host: 'localhost',
+        // path: '/',
+        // port: 9000,
+        // secure: false,
+
+        // TURN/STUN config - will be updated with credentials from signaling server
         config: {
           iceServers: [
-            { urls: ['stun:stun.l.google.com:19302'] },
+            { urls: [`stun:${turnUrl}:3478`] },
+            { urls: [`turn:${turnUrl}:3478`] },
           ]
         }
       }
@@ -90,7 +105,7 @@ function App() {
       try { discoveryWS?.close() } catch {}
       doc.destroy()
     }
-  }, [roomId, peers0, idToken])
+  }, [roomId, peers0, idToken, user])
 
   // Show login if no token (after all hooks are called)
   if (!idToken) {
@@ -124,7 +139,7 @@ function App() {
           marginTop: '-10px'
         }}>Collaborative code editor with P2P sync</p>
         <button
-          onClick={() => login()}
+          onClick={handleLogin}
           style={{
             padding: '14px 32px',
             fontSize: '16px',
@@ -149,7 +164,7 @@ function App() {
             e.target.style.boxShadow = '0 2px 8px rgba(66, 133, 244, 0.3)'
           }}
         >
-          Sign in with Google
+          Sign in
         </button>
       </div>
     )

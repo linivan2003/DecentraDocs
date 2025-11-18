@@ -50,9 +50,20 @@ class YPJProvider {
     if (discoveryWS) {
       discoveryWS.addEventListener('message', (e) => {
         const msg = JSON.parse(e.data || '{}')
-        if (msg.type === 'joined' && Array.isArray(msg.peers)) {
-          msg.peers.map(p => p.userId).filter(id => id && id !== this.peerId)
-            .forEach(id => this.dial(id))
+        if (msg.type === 'joined') {
+          // Update ICE servers from signaling server if provided
+          if (msg.iceServers && Array.isArray(msg.iceServers)) {
+            console.log('[YPJProvider] Received ICE servers from signaling server:', msg.iceServers)
+            // Update peer config with authenticated TURN credentials
+            if (this.peer && this.peer.options && this.peer.options.config) {
+              this.peer.options.config.iceServers = msg.iceServers
+            }
+          }
+          // Dial existing peers
+          if (Array.isArray(msg.peers)) {
+            msg.peers.map(p => p.userId).filter(id => id && id !== this.peerId)
+              .forEach(id => this.dial(id))
+          }
         } else if (msg.type === 'peer-joined' && msg.userId && msg.userId !== this.peerId) {
           this.dial(msg.userId)
         } else if (msg.type === 'peer-left' && msg.userId) {
