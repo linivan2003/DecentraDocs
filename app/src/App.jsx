@@ -5,6 +5,7 @@ import { MonacoBinding } from "y-monaco"   //imports MonacoBinding class that co
 import {IndexeddbPersistence} from "y-indexeddb" //imports IndexeddbPersistence class from y-indexeddb package
 import YPJProvider from './YPJProvider.jsx'
 import * as awarenessProtocol from 'y-protocols/awareness'
+import { login, getUser, getIdToken, getCanonicalUserId, getPeerId } from './auth'
 
 // Color for awareness
 function randomColor() {
@@ -13,61 +14,174 @@ function randomColor() {
 }
 
 function App() {
+  const [user, setUser] = useState(null)
+  const [idToken, setIdToken] = useState(null)
+
   const roomId = useMemo(() => new URLSearchParams(window.location.search).get('room') || 'test-room', [])
   const peers0 = useMemo(() => {
     const raw = new URLSearchParams(window.location.search).get('peers') || ''
     return raw.split(',').map(s => s.trim()).filter(Boolean)
   }, [])
 
+  // NOTE: need to add the hooks here otherwise you get some weird error abt conditional returns??? idk
   const ydocRef = useRef()
   const awarenessRef = useRef()
   const transportRef = useRef()
   const bindingRef = useRef()
 
+  // is user is already authenticated on mount?
   useEffect(() => {
-    const myId = new URLSearchParams(window.location.search).get('id') || crypto.randomUUID();
-    const doc = new Y.Doc()
-    ydocRef.current = doc
-    new IndexeddbPersistence(`doc:${roomId}`, doc)
-
-    const awareness = new awarenessProtocol.Awareness(doc)
-    awarenessRef.current = awareness
-    awareness.setLocalStateField('user', { name: `User-${Math.floor(Math.random()*1000)}`, color: randomColor() })
-
-   // OIDC-gated discovery WS (make sure this endpoint exists)
-   const token = 'ID_TOKEN'
-   // const discoveryWS = new WebSocket(`wss://signal.thisone.work/room/${roomId}?token=${token}`)
-   // const discoveryWS = null // using URL ?peers=… for now
-    const discoveryWS = new WebSocket(`wss://signal.thisone.work/room/${encodeURIComponent(roomId)}?userId=${encodeURIComponent(myId)}&token=${encodeURIComponent(token)}`);
-
-    // Start PeerJS transport
-    transportRef.current = new YPJProvider({
-      roomId,
-      peerId: myId,                
-      initialPeers: peers0,   
-      ydoc: doc,
-      awareness,
-      discoveryWS,
-      peerOpts: {
-       host: 'signal.thisone.work',
-       path: '/signal',
-       port: 443,
-       secure: true,
-        // TURN/STUN config:
-        config: {
-          iceServers: [
-            { urls: ['stun:stun.l.google.com:19302'] },
-          ]
-        }
+    getUser().then(user => {
+      if (user) {
+        setUser(user)
+        setIdToken(user.id_token)
       }
     })
+  }, [])
+
+  const handleLogin = async () => {
+    try {
+      await login()
+    } catch (error) {
+      console.error('Login failed:', error)
+    }
+  }
+
+  useEffect(() => {
+    // is user logged in? (need some more thorough checking here...)
+    if (!idToken || !user) return
+
+    let discoveryWS
+    let mounted = true
+
+    const setup = async () => {
+      // Canonical user ID for WebSocket signaling (iss#sub format) <- taken from design doc 
+      const canonicalId = getCanonicalUserId(user)
+      // hash it, w/o hashing i was getting some peerjs error
+      const myPeerId = await getPeerId(user)
+
+      if (!mounted) return
+
+      const doc = new Y.Doc()
+      ydocRef.current = doc
+      new IndexeddbPersistence(`doc:${roomId}`, doc)
+
+      const awareness = new awarenessProtocol.Awareness(doc)
+      awarenessRef.current = awareness
+      const displayName = user.profile.name || user.profile.email || 'Anonymous'
+      awareness.setLocalStateField('user', { name: displayName, color: randomColor() })
+
+      // OIDC discovery WS (use canonical ID) <- again, taken from design doc 
+      const signalingUrl = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:10000'
+      discoveryWS = new WebSocket(`${signalingUrl}/room/${encodeURIComponent(roomId)}?userId=${encodeURIComponent(canonicalId)}&token=${encodeURIComponent(idToken)}`)
+
+      // TURN server config
+      const turnUrl = import.meta.env.VITE_TURN_URL || 'localhost'
+
+      // Start PeerJS transport
+      transportRef.current = new YPJProvider({
+        roomId,
+        peerId: myPeerId,
+        initialPeers: peers0,
+        ydoc: doc,
+        awareness,
+        discoveryWS,
+        peerOpts: {
+          // Production setup:
+          host: 'signal.emmettlsc.com',
+          path: '/',
+          port: 443,
+          secure: true,
+
+          // For local testing:
+          // host: 'localhost',
+          // path: '/',
+          // port: 9000,
+          // secure: false,
+
+          // TURN/STUN config - will be updated with credentials from signaling server
+          config: {
+            iceServers: [
+              { urls: [`stun:${turnUrl}:3478`] },
+              { urls: [`turn:${turnUrl}:3478`] },
+            ]
+          }
+        }
+      })
+    }
+
+    setup()
 
     return () => {
+      mounted = false
       transportRef.current?.destroy()
       try { discoveryWS?.close() } catch {}
-      doc.destroy()
+      ydocRef.current?.destroy()
     }
-  }, [roomId, peers0])
+  }, [roomId, peers0, idToken, user])
+
+  // Show login if no token (after all hooks are called)
+  if (!idToken) {
+    return (
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100vw',
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '30px',
+        background: '#1e1e1e',
+        color: '#fff',
+        margin: 0,
+        padding: 0
+      }}>
+        <h1 style={{
+          fontSize: '48px',
+          fontWeight: '600',
+          margin: 0,
+          letterSpacing: '-0.5px'
+        }}>DecentraDocs</h1>
+        <p style={{
+          fontSize: '18px',
+          color: '#a0a0a0',
+          margin: 0,
+          marginTop: '-10px'
+        }}>Collaborative code editor with P2P sync</p>
+        <button
+          onClick={handleLogin}
+          style={{
+            padding: '14px 32px',
+            fontSize: '16px',
+            fontWeight: '500',
+            background: '#4285f4',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            boxShadow: '0 2px 8px rgba(66, 133, 244, 0.3)',
+            transition: 'all 0.2s ease',
+            marginTop: '10px'
+          }}
+          onMouseOver={(e) => {
+            e.target.style.background = '#357ae8'
+            e.target.style.transform = 'translateY(-1px)'
+            e.target.style.boxShadow = '0 4px 12px rgba(66, 133, 244, 0.4)'
+          }}
+          onMouseOut={(e) => {
+            e.target.style.background = '#4285f4'
+            e.target.style.transform = 'translateY(0)'
+            e.target.style.boxShadow = '0 2px 8px rgba(66, 133, 244, 0.3)'
+          }}
+        >
+          Sign in
+        </button>
+      </div>
+    )
+  }
 
   function handleEditorDidMount(editor) {
     const ytext = ydocRef.current.getText('monaco')

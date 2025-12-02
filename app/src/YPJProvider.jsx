@@ -4,6 +4,16 @@ import { Awareness } from 'y-protocols/awareness'
 import { encodeAwarenessUpdate, applyAwarenessUpdate } from 'y-protocols/awareness'
 import { applyUpdate } from 'yjs'
 
+// helper to hash a canonical user ID to so its URL safe
+async function hashUserId(canonicalId) {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(canonicalId)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+  return hashHex.substring(0, 32)
+}
+
 class YPJProvider {
   constructor({ roomId, peerId, initialPeers = [], ydoc, awareness, peerOpts, discoveryWS }) {
     this.roomId = roomId
@@ -48,15 +58,38 @@ class YPJProvider {
 
     // 4) Discovery WS (OIDC room service)
     if (discoveryWS) {
-      discoveryWS.addEventListener('message', (e) => {
+      discoveryWS.addEventListener('message', async (e) => {
         const msg = JSON.parse(e.data || '{}')
-        if (msg.type === 'joined' && Array.isArray(msg.peers)) {
-          msg.peers.map(p => p.userId).filter(id => id && id !== this.peerId)
-            .forEach(id => this.dial(id))
-        } else if (msg.type === 'peer-joined' && msg.userId && msg.userId !== this.peerId) {
-          this.dial(msg.userId)
+        if (msg.type === 'joined') {
+          // Update ICE servers from signaling server if provided
+          if (msg.iceServers && Array.isArray(msg.iceServers)) {
+            console.log('[YPJProvider] Received ICE servers from signaling server:', msg.iceServers)
+            // Update peer config with authenticated TURN credentials
+            if (this.peer && this.peer.options && this.peer.options.config) {
+              this.peer.options.config.iceServers = msg.iceServers
+            }
+          }
+          // Dial existing peers
+          if (Array.isArray(msg.peers)) {
+            for (const peer of msg.peers) {
+              if (peer.userId) {
+                const peerId = await hashUserId(peer.userId)
+                if (peerId !== this.peerId) {
+                  this.dial(peerId)
+                }
+              }
+            }
+          }
+        } else if (msg.type === 'peer-joined' && msg.userId) {
+          // hash canonical ID to get the peer ID
+          const peerId = await hashUserId(msg.userId)
+          if (peerId !== this.peerId) {
+            this.dial(peerId)
+          }
         } else if (msg.type === 'peer-left' && msg.userId) {
-          this.drop(msg.userId)
+          /// hash canonical ID to get the peer ID
+          const peerId = await hashUserId(msg.userId)
+          this.drop(peerId)
         }
       })
     }

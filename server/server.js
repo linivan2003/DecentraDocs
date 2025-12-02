@@ -1,11 +1,18 @@
-const { PeerServer } = require("peer");
-const WebSocket = require("ws");
-const url = require("url");
+import { PeerServer } from "peer";
+import { WebSocketServer } from "ws";
+import { parse } from "url";
+import { createHmac } from "crypto";
+import { jwtVerify, createRemoteJWKSet } from "jose";
 
 const peerServer = PeerServer({
   port: 9000,
-  path: "/",   // keep to this because nginx strips the "/signal" portion
+  path: "/",
   proxied: true,
+  // below are optional
+  allow_discovery: true,
+  cleanup_out_msgs: 1000,
+  expire_timeout: 5000,
+  alive_timeout: 60000,
 });
 
 peerServer.on("connection", (client) => {
@@ -17,37 +24,80 @@ peerServer.on("disconnect", (client) => {
 });
 
 console.log("PeerJS server running on port 9000, path:", "/signal");
+console.log(peerServer);
 
-// WebSocket Discovery Server on port 10000
-const wss = new WebSocket.Server({ port: 10000 });
+const wss = new WebSocketServer({ port: 10000 });
+const rooms = new Map(); // roomId -> Set of clients
 
-// Store rooms: roomId -> Set of WebSocket connections
-const rooms = new Map();
+// config stuff
+const DEX_ISSUER = process.env.DEX_ISSUER || "https://dex.emmettlsc.com";
+const DEX_CLIENT_ID = process.env.DEX_CLIENT_ID || "decentradocs";
+const TURN_SECRET = process.env.TURN_SECRET || "eeeec280850408ea16931ca26d2f6cdf43fa16b65405752a164fb1fa3c35270a";
+const TURN_URL = process.env.TURN_URL || "turn.emmettlsc.com";
 
-// Helper to parse room path and query params
-function parseRequest(req) {
-  const parsed = url.parse(req.url, true);
-  const pathMatch = parsed.pathname.match(/^\/room\/(.+)$/);
-  const roomId = pathMatch ? decodeURIComponent(pathMatch[1]) : null;
-  const userId = parsed.query.userId ? decodeURIComponent(parsed.query.userId) : null;
-  const token = parsed.query.token ? decodeURIComponent(parsed.query.token) : null;
-  return { roomId, userId, token };
+// JWKS endpoint for Dex
+const JWKS = createRemoteJWKSet(new URL(`${DEX_ISSUER}/keys`));
+
+// verify dex's JWT token
+async function verifyDexToken(token) {
+  try {
+    const { payload } = await jwtVerify(token, JWKS, {
+      issuer: DEX_ISSUER,
+      audience: DEX_CLIENT_ID,
+    });
+
+    // Return user info with canonical user ID format (iss#sub) <- taken from design doc 
+    return {
+      userId: `${payload.iss}#${payload.sub}`,
+      email: payload.email,
+      name: payload.name,
+      sub: payload.sub,
+      iss: payload.iss,
+    };
+  } catch (error) {
+    console.error("Token verification failed:", error.message);
+    return null;
+  }
 }
 
-wss.on("connection", (ws, req) => {
-  const { roomId, userId, token } = parseRequest(req);
-  
-  if (!roomId) {
-    ws.close(1008, "Invalid room path");
-    return;
+// generate TURN credentials w/ HMAC (via coturn API)
+function generateTurnCredentials(userId, ttl = 86400) {
+  const timestamp = Math.floor(Date.now() / 1000) + ttl;
+  const username = `${timestamp}:${userId}`;
+  const hmac = createHmac("sha1", TURN_SECRET);
+  hmac.update(username);
+  const credential = hmac.digest("base64");
+
+  return {
+    username,
+    credential,
+  };
+}
+
+wss.on("connection", async (ws, req) => {
+  const { pathname, query } = parse(req.url, true);
+  const match = pathname.match(/^\/room\/([^/]+)$/);
+  if (!match) return ws.close(1008, "Invalid room");
+
+  const roomId = match[1];
+  const userId = query.userId;
+  const token = query.token;
+
+  if (!userId) return ws.close(1008, "Missing userId");
+  if (!token) return ws.close(1008, "Missing token");
+
+  // Verify the token from Dex
+  const userInfo = await verifyDexToken(token);
+  if (!userInfo) {
+    console.log(`Authentication failed for userId: ${userId}`);
+    return ws.close(1008, "Invalid token");
   }
 
-  console.log(`Discovery client connected: room=${roomId}, userId=${userId}`);
+  console.log(`User authenticated: ${userInfo.email} (${userInfo.userId})`);
 
-  // Store userId and roomId on the WebSocket
-  ws.roomId = roomId;
-  ws.userId = userId;
+  ws.userId = userInfo.userId;
   ws.token = token;
+  ws.userInfo = userInfo;
 
   // Get or create room
   if (!rooms.has(roomId)) {
@@ -63,59 +113,52 @@ wss.on("connection", (ws, req) => {
   // Add this peer to the room
   room.add(ws);
 
-  // Send "joined" message with current peers
+  // generate TURN credentials
+  const turnCreds = generateTurnCredentials(userInfo.userId);
+
+  // send joined message with peers and ICE servers
+  const peers = [...room]
+    .filter(p => p !== ws)
+    .map(p => ({
+      userId: p.userId,
+      displayName: p.userInfo.name || p.userInfo.email
+    }));
+
+  const iceServers = [
+    {
+      urls: [`stun:${TURN_URL}:3478`],
+    },
+    {
+      urls: [`turn:${TURN_URL}:3478`],
+      username: turnCreds.username,
+      credential: turnCreds.credential,
+    },
+  ];
+
   ws.send(JSON.stringify({
     type: "joined",
-    peers: currentPeers
+    peers,
+    iceServers
   }));
 
-  // Broadcast "peer-joined" to all other peers in the room
-  room.forEach(peer => {
-    if (peer !== ws && peer.readyState === WebSocket.OPEN) {
-      peer.send(JSON.stringify({
-        type: "peer-joined",
-        userId: userId
-      }));
-    }
+  // notify other peers about the new peer
+  const peerJoinedMsg = JSON.stringify({
+    type: "peer-joined",
+    userId: userInfo.userId,
+    displayName: userInfo.name || userInfo.email,
   });
-
-  ws.on("message", (message) => {
-    try {
-      const data = JSON.parse(message);
-      // Handle any additional message types if needed
-      if (data.type === "ping") {
-        ws.send(JSON.stringify({ type: "pong" }));
-      }
-    } catch (error) {
-      console.error("Error handling discovery message:", error);
+  for (const peer of room) {
+    if (peer !== ws) {
+      peer.send(peerJoinedMsg);
     }
-  });
+  }
 
+  // disconnect
   ws.on("close", () => {
-    const room = rooms.get(ws.roomId);
-    if (room) {
-      room.delete(ws);
-      
-      // If room is empty, clean it up
-      if (room.size === 0) {
-        rooms.delete(ws.roomId);
-      } else {
-        // Broadcast "peer-left" to remaining peers
-        room.forEach(peer => {
-          if (peer.readyState === WebSocket.OPEN) {
-            peer.send(JSON.stringify({
-              type: "peer-left",
-              userId: ws.userId
-            }));
-          }
-        });
-      }
-    }
-    console.log(`Discovery client disconnected: room=${ws.roomId}, userId=${ws.userId}`);
-  });
-
-  ws.on("error", (error) => {
-    console.error("WebSocket error:", error);
+    room.delete(ws);
+    const msg = JSON.stringify({ type: "peer-left", userId: userInfo.userId });
+    for (const peer of room) peer.send(msg);
+    if (room.size === 0) rooms.delete(roomId);
   });
 });
 
