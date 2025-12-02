@@ -1,9 +1,18 @@
-const { PeerServer } = require("peer");
+import { PeerServer } from "peer";
+import { WebSocketServer } from "ws";
+import { parse } from "url";
+import { createHmac } from "crypto";
+import { jwtVerify, createRemoteJWKSet } from "jose";
 
 const peerServer = PeerServer({
   port: 9000,
-  path: "/",   // keep to this because nginx strips the "/signal" portion
+  path: "/",
   proxied: true,
+  // below are optional
+  allow_discovery: true,
+  cleanup_out_msgs: 1000,
+  expire_timeout: 5000,
+  alive_timeout: 60000,
 });
 
 peerServer.on("connection", (client) => {
@@ -17,11 +26,6 @@ peerServer.on("disconnect", (client) => {
 
 console.log("PeerJS server running on port 9000, path:", "/signal");
 console.log(peerServer);
-
-const { WebSocketServer } = require("ws");
-const { parse } = require("url");
-const crypto = require("crypto");
-const { jwtVerify, createRemoteJWKSet } = require("jose");
 
 const wss = new WebSocketServer({ port: 10000 });
 const rooms = new Map(); // roomId -> Set of clients
@@ -43,7 +47,7 @@ async function verifyDexToken(token) {
       audience: DEX_CLIENT_ID,
     });
 
-    // Return user info with canonical user ID format (iss#sub)
+    // Return user info with canonical user ID format (iss#sub) <- taken from design doc 
     return {
       userId: `${payload.iss}#${payload.sub}`,
       email: payload.email,
@@ -61,7 +65,7 @@ async function verifyDexToken(token) {
 function generateTurnCredentials(userId, ttl = 86400) {
   const timestamp = Math.floor(Date.now() / 1000) + ttl;
   const username = `${timestamp}:${userId}`;
-  const hmac = crypto.createHmac("sha1", TURN_SECRET);
+  const hmac = createHmac("sha1", TURN_SECRET);
   hmac.update(username);
   const credential = hmac.digest("base64");
 

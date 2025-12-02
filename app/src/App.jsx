@@ -5,7 +5,7 @@ import { MonacoBinding } from "y-monaco"   //imports MonacoBinding class that co
 import {IndexeddbPersistence} from "y-indexeddb" //imports IndexeddbPersistence class from y-indexeddb package
 import YPJProvider from './YPJProvider.jsx'
 import * as awarenessProtocol from 'y-protocols/awareness'
-import { login, getUser, getIdToken, getCanonicalUserId } from './auth'
+import { login, getUser, getIdToken, getCanonicalUserId, getPeerId } from './auth'
 
 // Color for awareness
 function randomColor() {
@@ -51,59 +51,72 @@ function App() {
     // is user logged in? (need some more thorough checking here...)
     if (!idToken || !user) return
 
-    // use the canonical user ID (iss#sub format as per the wip design doc... TODO do some review here)
-    const myId = getCanonicalUserId(user)
-    const doc = new Y.Doc()
-    ydocRef.current = doc
-    new IndexeddbPersistence(`doc:${roomId}`, doc)
+    let discoveryWS
+    let mounted = true
 
-    const awareness = new awarenessProtocol.Awareness(doc)
-    awarenessRef.current = awareness
-    const displayName = user.profile.name || user.profile.email || 'Anonymous'
-    awareness.setLocalStateField('user', { name: displayName, color: randomColor() })
+    const setup = async () => {
+      // Canonical user ID for WebSocket signaling (iss#sub format) <- taken from design doc 
+      const canonicalId = getCanonicalUserId(user)
+      // hash it, w/o hashing i was getting some peerjs error
+      const myPeerId = await getPeerId(user)
 
-    // OIDC discovery WS 
-    const signalingUrl = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:10000'
-    const discoveryWS = new WebSocket(`${signalingUrl}/room/${encodeURIComponent(roomId)}?userId=${encodeURIComponent(myId)}&token=${encodeURIComponent(idToken)}`)
+      if (!mounted) return
 
-    // TURN server config
-    const turnUrl = import.meta.env.VITE_TURN_URL || 'localhost'
+      const doc = new Y.Doc()
+      ydocRef.current = doc
+      new IndexeddbPersistence(`doc:${roomId}`, doc)
 
-    // Start PeerJS transport
-    transportRef.current = new YPJProvider({
-      roomId,
-      peerId: myId,
-      initialPeers: peers0,
-      ydoc: doc,
-      awareness,
-      discoveryWS,
-      peerOpts: {
-        // Production setup:
-        host: 'signal.emmettlsc.com',
-        path: '/',
-        port: 443,
-        secure: true,
+      const awareness = new awarenessProtocol.Awareness(doc)
+      awarenessRef.current = awareness
+      const displayName = user.profile.name || user.profile.email || 'Anonymous'
+      awareness.setLocalStateField('user', { name: displayName, color: randomColor() })
 
-        // For local testing:
-        // host: 'localhost',
-        // path: '/',
-        // port: 9000,
-        // secure: false,
+      // OIDC discovery WS (use canonical ID) <- again, taken from design doc 
+      const signalingUrl = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:10000'
+      discoveryWS = new WebSocket(`${signalingUrl}/room/${encodeURIComponent(roomId)}?userId=${encodeURIComponent(canonicalId)}&token=${encodeURIComponent(idToken)}`)
 
-        // TURN/STUN config - will be updated with credentials from signaling server
-        config: {
-          iceServers: [
-            { urls: [`stun:${turnUrl}:3478`] },
-            { urls: [`turn:${turnUrl}:3478`] },
-          ]
+      // TURN server config
+      const turnUrl = import.meta.env.VITE_TURN_URL || 'localhost'
+
+      // Start PeerJS transport
+      transportRef.current = new YPJProvider({
+        roomId,
+        peerId: myPeerId,
+        initialPeers: peers0,
+        ydoc: doc,
+        awareness,
+        discoveryWS,
+        peerOpts: {
+          // Production setup:
+          host: 'signal.emmettlsc.com',
+          path: '/',
+          port: 443,
+          secure: true,
+
+          // For local testing:
+          // host: 'localhost',
+          // path: '/',
+          // port: 9000,
+          // secure: false,
+
+          // TURN/STUN config - will be updated with credentials from signaling server
+          config: {
+            iceServers: [
+              { urls: [`stun:${turnUrl}:3478`] },
+              { urls: [`turn:${turnUrl}:3478`] },
+            ]
+          }
         }
-      }
-    })
+      })
+    }
+
+    setup()
 
     return () => {
+      mounted = false
       transportRef.current?.destroy()
       try { discoveryWS?.close() } catch {}
-      doc.destroy()
+      ydocRef.current?.destroy()
     }
   }, [roomId, peers0, idToken, user])
 

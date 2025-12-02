@@ -82,3 +82,18 @@ export function getCanonicalUserId(user) {
   if (!user) return null
   return `${user.profile.iss}#${user.profile.sub}`
 }
+
+// get URL-safe peer ID for PeerJS (by hashing the canonical ID)
+export async function getPeerId(user) {
+  if (!user) return null
+  const canonicalId = getCanonicalUserId(user)
+
+  const encoder = new TextEncoder()
+  const data = encoder.encode(canonicalId)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+
+  // first 32 chars seems reasonable for peer ID length, can evaluate this later
+  return hashHex.substring(0, 32)
+}
